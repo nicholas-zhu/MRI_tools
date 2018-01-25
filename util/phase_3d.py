@@ -14,8 +14,9 @@ def lap_unwrap(phase_array, axes = (0,1,2), pad_size = [6,6,6], res = [1,1,1]):
     xx, yy, zz = ((xx - np.round((raw_phase.shape[0])/2)) / field_of_view[0],
                   (yy - np.round((raw_phase.shape[1])/2)) / field_of_view[1],
                   (zz - np.round((raw_phase.shape[2])/2)) / field_of_view[2])
-    k2 = np.square(xx) + np.square(yy) + np.square(zz)+ np.spacing(1)
-    k2 = np.expand_dims(k2, axis=3)
+    k2 = xx**2 + yy**2 + zz**2 + np.spacing(1)
+    if raw_phase.ndim>3 :
+        k2 = np.expand_dims(k2, axis=3)
     del xx,yy,zz
     
     laplacian = np.zeros(raw_phase.shape, dtype=np.complex)

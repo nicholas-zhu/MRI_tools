@@ -20,3 +20,9 @@ def zpad2(img_arr, r_size, mode='constant'):
     img_arr_n = np.pad(img_arr, p_size, mode)
     return img_arr_n
     
+def crop(img_arr, crop_size):
+    if img_arr.ndim > 3:
+        img_arr_c = img_arr[crop_size[0]:-crop_size[0],crop_size[1]:-crop_size[1],crop_size[2]:-crop_size[2],...]
+    else:
+        img_arr_c = img_arr[crop_size[0]:-crop_size[0],crop_size[1]:-crop_size[1],crop_size[2]:-crop_size[2]]
+    return img_arr_c
