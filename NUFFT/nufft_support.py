@@ -81,7 +81,7 @@ def gridH(traj, data_n, grid_r, width = 3.5, oversample = 1.5):
         ind_x = np.arange(np.ceil(np.maximum(kx[i]-width,grid_r[0,0])),np.floor(np.minimum(kx[i]+width,grid_r[0,1])))
         ind_y = np.arange(np.ceil(np.maximum(ky[i]-width,grid_r[1,0])),np.floor(np.minimum(ky[i]+width,grid_r[1,1])))
         ind_z = np.arange(np.ceil(np.maximum(kz[i]-width,grid_r[2,0])),np.floor(np.minimum(kz[i]+width,grid_r[2,1])))
-        kgrid_y,kgrid_x,kgrid_z = np.meshgrid(ind_y,ind_x,ind_z)
+        kgrid_x,kgrid_y,kgrid_z = np.meshgrid(ind_x,ind_y,ind_z)
         kgrid = np.stack((kgrid_x.flatten()-kx[i],kgrid_y.flatten()-ky[i],kgrid_z.flatten()-kz[i]),axis=1)
         weight = KB_3d(kgrid,kb_table,width)
         kernel = weight*data_n[0,i]
