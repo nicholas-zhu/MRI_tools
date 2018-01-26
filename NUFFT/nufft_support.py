@@ -63,7 +63,7 @@ def grid(traj, data_c, grid_r, width = 3.5, oversample = 1.5):
         kgrid_y,kgrid_x,kgrid_z = np.meshgrid(ind_y,ind_x,ind_z)
         kgrid = np.stack((kgrid_x.flatten()-kx[i],kgrid_y.flatten()-ky[i],kgrid_z.flatten()-kz[i]),axis=1)
         weight = KB_3d(kgrid,kb_table,width)
-        kernel = data_c[kgrid_x.reshape(-1).astype(int),kgrid_y.reshape(-1).astype(int),kgrid_z.reshape(-1).astype(int)]
+        kernel = data_c[(kgrid_x.reshape(-1)-grid_r[0,0]).astype(int),(kgrid_y.reshape(-1)-grid_r[1,0]).astype(int),(kgrid_z.reshape(-1)-grid_r[2,0]).astype(int)]
         data_n[0,i] = np.sum(kernel*weight)
         
     return data_n
@@ -85,7 +85,7 @@ def gridH(traj, data_n, grid_r, width = 3.5, oversample = 1.5):
         kgrid = np.stack((kgrid_x.flatten()-kx[i],kgrid_y.flatten()-ky[i],kgrid_z.flatten()-kz[i]),axis=1)
         weight = KB_3d(kgrid,kb_table,width)
         kernel = weight*data_n[0,i]
-        data_c[kgrid_x.reshape(-1).astype(int),kgrid_y.reshape(-1).astype(int),kgrid_z.reshape(-1).astype(int)] += kernel
+        data_c[(kgrid_x.reshape(-1)-grid_r[0,0]).astype(int),(kgrid_y.reshape(-1)-grid_r[1,0]).astype(int),(kgrid_z.reshape(-1)-grid_r[2,0]).astype(int)] += kernel
         if i % 100000 ==0:
             print(i)
         
