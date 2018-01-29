@@ -172,20 +172,76 @@ def KB_3d2(grid_x, grid_y, grid_z, kb_table, width):
     return wx, wy, wz
                    
 
-def gridH2(samples, traj, data_n, grid_r, width):
-    # weight calculation
+def grid2(samples, traj, data_c, grid_r, width, batch_size = 500000):
+    # reduce for loop calculation
+    kb_table = kb_table2
+    data_n = np.zeros(np.array([1,samples]),dtype = np.complex128)
+    kx = traj[0,:]
+    ky = traj[1,:]
+    kz = traj[2,:] 
+
+    kernal_ind = np.arange(np.ceil(-width),np.floor(width)+1)
+    kernal_ind = kernal_ind[None,:]
+    k_len = kernal_ind.size
+    for i in range(samples//batch_size):
+        print(i)
+        batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
+        rind_x = np.round(np.tile(kx[batch_ind][:,None],(1,k_len))+kernal_ind).astype(np.int32)
+        rind_y = np.round(np.tile(ky[batch_ind][:,None],(1,k_len))+kernal_ind).astype(np.int32)
+        rind_z = np.round(np.tile(kz[batch_ind][:,None],(1,k_len))+kernal_ind).astype(np.int32)
+        kgrid_x = np.tile(rind_x[:,:,None,None],(1,1,k_len,k_len)).reshape([batch_ind.size,-1])
+        kgrid_y = np.tile(rind_y[:,None,:,None],(1,k_len,1,k_len)).reshape([batch_ind.size,-1])
+        kgrid_z = np.tile(rind_z[:,None,None,:],(1,k_len,k_len,1)).reshape([batch_ind.size,-1])
+        
+        wx,wy,wz = KB_3d2(np.abs(rind_x-kx[batch_ind][:,None]),np.abs(rind_y-ky[batch_ind][:,None]),np.abs(rind_z-kz[batch_ind][:,None]),kb_table,width)
+        
+        wx = np.tile(wx[:,:,None,None],(1,1,k_len,k_len)).reshape([batch_ind.size,-1])
+        wy = np.tile(wy[:,None,:,None],(1,k_len,1,k_len)).reshape([batch_ind.size,-1])
+        wz = np.tile(wz[:,None,None,:],(1,k_len,k_len,1)).reshape([batch_ind.size,-1])
+        w = wx*wy*wz
+
+        aind_x = (np.minimum(np.maximum(kgrid_x,grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])
+        aind_y = (np.minimum(np.maximum(kgrid_y,grid_r[1,0]),grid_r[1,1]-1) - grid_r[1,0])
+        aind_z = (np.minimum(np.maximum(kgrid_z,grid_r[2,0]),grid_r[2,1]-1) - grid_r[2,0])
+        w_mask = (aind_x == kgrid_x-grid_r[0,0])*(aind_y == kgrid_y-grid_r[1,0])*(aind_z == kgrid_z-grid_r[2,0])
+        w = w*w_mask
+        
+        data_n[batch_ind] = np.sum(w*data_c[aind_x,aind_y,aind_z],axis=1)
+            
+    return data_n
+
+def KB_3d2(grid_x, grid_y, grid_z, kb_table, width):
+    # grid*[N,2*width] kb_table[128]
+    # low accuracy
+    scale = (width)/(kb_table.size-1)
+    frac_x = np.minimum(np.abs(grid_x)/scale,kb_table.size-2)
+    frac_y = np.minimum(np.abs(grid_y)/scale,kb_table.size-2)
+    frac_z = np.minimum(np.abs(grid_z)/scale,kb_table.size-2)
+    grid_xs = np.floor(frac_x).astype(np.int32)
+    grid_ys = np.floor(frac_y).astype(np.int32)
+    grid_zs = np.floor(frac_z).astype(np.int32)
+    frac_x = frac_x-grid_xs
+    frac_y = frac_y-grid_ys
+    frac_z = frac_z-grid_zs
+    
+    wx = (1-frac_x)*kb_table[grid_xs] + frac_x*kb_table[grid_xs+1]
+    wy = (1-frac_y)*kb_table[grid_ys] + frac_y*kb_table[grid_ys+1]
+    wz = (1-frac_z)*kb_table[grid_zs] + frac_z*kb_table[grid_zs+1]
+    
+    return wx, wy, wz
+                   
+
+def gridH2(samples, traj, data_n, grid_r, width, batch_size = 500000):
+    # reduce for loop calculation
     kb_table = kb_table2
     data_c = np.zeros([grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]],dtype = np.complex128)
     kx = traj[0,:]
     ky = traj[1,:]
     kz = traj[2,:] 
-    batch_size = 500000
 
     kernal_ind = np.arange(np.ceil(-width),np.floor(width)+1)
     kernal_ind = kernal_ind[None,:]
     k_len = kernal_ind.size
-    # test
-    #for i in [1]:
     for i in range(samples//batch_size):
         print(i)
         batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
@@ -217,19 +273,17 @@ def gridH2(samples, traj, data_n, grid_r, width):
             
     return data_c    
     
-def gTg2(samples, traj, data_c, grid_r, width):
-    # weight calculation
+def gTg2(samples, traj, data_c, grid_r, width, batch_size = 500000):
+    # reduce for loop calculation
     kb_table = kb_table2
     data_ct = np.zeros([grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]],dtype = np.complex128)
     kx = traj[0,:]
     ky = traj[1,:]
     kz = traj[2,:] 
-    print(data_ct.shape)
-    batch_size = 50000
 
-    k_ind = np.arange(np.floor(-width),np.floor(width))
-    k_ind = k_ind[None,:]
-    k_len = k_ind.size
+    kernal_ind = np.arange(np.ceil(-width),np.floor(width)+1)
+    kernal_ind = kernal_ind[None,:]
+    k_len = kernal_ind.size
     for i in range(samples//batch_size):
         print(i)
         batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
