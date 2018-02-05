@@ -53,10 +53,15 @@ class NUFFT3D():
         if self.p is None :
             data_c = gridH(self.samples,self.traj, data_n, self.grid_r, width =self.width)
         else:
-            data_c = gridH(self.samples,self.traj, data_n*self.p, self.grid_r, width =self.width)
+            data_c = gridH(self.samples,self.traj, data_n*self.p, self.grid_r, width = self.width)
         img_hc = self.A.IFT(data_c)
-        
         return img_hc
+    
+    def Toeplitz(self,img_c):
+        data_c = self.A.FT(img_c)
+        data_ct = gTg2(self.samples,self.traj, data_c, self.grid_r, self.width, pattern = self.p)
+        img_ct = self.A.IFT(data_ct)
+        return img_ct
 
     def density_est(self):
         # TODO add density estimation
@@ -87,15 +92,15 @@ def gridT_sum(data_t,index_t,data_s,weight,pattern,N):
     # data_s: [N_s*L] sample data
     # weight: [N_s*L] KB_win
     # pattern: [N_index] density
-    L = data_s.shape[1]
-    if pattern is None:
+
+    if pattern.size == 1:
         for i in range(N):
             index = index_t[i,:]
-            data_t[index] += np.sum(data_s[index]*weight[i,:])*weight[i,:]
+            data_t[index] += np.sum(data_s[i,:]*weight[i,:])*weight[i,:]
     else:
         for i in range(N):
             index = index_t[i,:]
-            data_t[index] += np.sum(data_s[index]*weight[i,:])*weight[i,:]*pattern[i]
+            data_t[index] += np.sum(data_s[i,:]*weight[i,:])*weight[i,:]*pattern[i]
         
     return data_t     
     
@@ -241,7 +246,7 @@ def gTg2(samples, traj, data_c, grid_r, width, pattern = None, batch_size = 5000
     
     shape_grid = [grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]]
     shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
-    data_ct = np.zero_like(data_c)
+    data_ct = np.zeros_like(data_c)
     
     kernal_ind = np.arange(np.ceil(-width),np.floor(width)+1)
     kernal_ind = kernal_ind[None,:]
@@ -270,10 +275,13 @@ def gTg2(samples, traj, data_c, grid_r, width, pattern = None, batch_size = 5000
         w = w.reshape([batch_size,-1])
         
         strides_ind = shape_stride[0]*aind_x + shape_stride[1]*aind_y + shape_stride[2]*aind_z
-        strides_ind = strides_ind.reshape([samples,-1])
+        strides_ind = strides_ind.reshape([batch_size,-1])
         
-        data_s = data_c[stride_ind]
-        gridT_sum(data_ct,stride_ind,data_s,w,pattern,batch_ind)
+        data_s = data_c[strides_ind]
+        if pattern is None:
+            gridT_sum(data_ct,strides_ind,data_s,w,np.array([1]),batch_size)
+        else:
+            gridT_sum(data_ct,strides_ind,data_s,w,pattern,batch_size)
     
     data_ct = data_ct.reshape(shape_grid)
     return data_ct
