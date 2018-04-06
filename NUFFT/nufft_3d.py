@@ -23,7 +23,7 @@ import cupy as cp
 #     extend to GPU
 
 kb_table = kb128.kb128
-kb_table = kb128.kb128
+kb_table = kb128.kb128_2
 
 class NUFFT3D():
     def __init__(self, traj, grid_r = None, os = 1.3, pattern = None, width = 3):
@@ -156,7 +156,8 @@ def gridH(samples, traj, data_n, grid_r, width, batch_size = 1000000):
     # width: Half length of KB window
     # batch_size: limit memory use
     data_n = data_n.ravel()
-    kb_t = kb_table
+    # kb_t = kb_table
+    kb_t = kb_table2
     kx = traj[0,:]
     ky = traj[1,:]
     kz = traj[2,:]
@@ -223,7 +224,8 @@ def grid(samples, traj, data_c, grid_r, width, batch_size = 500000):
     # width: Half length of KB window
     # batch_size: limit memory use
     data_c = data_c.ravel()
-    kb_t = kb_table
+    # kb_t = kb_table
+    kb_t = kb_table2
     kx = traj[0,:]
     ky = traj[1,:]
     kz = traj[2,:]
@@ -273,7 +275,8 @@ def gTg2(samples, traj, data_c, grid_r, width, pattern = None, batch_size = 5000
     # width: Half length of KB window
     # batch_size: limit memory use
     data_c = data_c.ravel()
-    kb_t = kb_table
+    # kb_t = kb_table
+    kb_t = kb_table2
     kx = traj[0,:]
     ky = traj[1,:]
     kz = traj[2,:]
