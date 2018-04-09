@@ -211,8 +211,48 @@ def grid_gpu(samples, traj, data_c, grid_r, width, batch_size = 500000):
     samples_g = cp.asarray(samples)
     traj_g = cp.asarray(traj)
     grid_r_g = cp.asarray(grid_r)
+    kb_g  = cp.asarray(kb_table2)
     
+    kx = traj[0,:]
+    ky = traj[1,:]
+    kz = traj[2,:]
     
+    shape_grid = [grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]]
+    shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
+    data_n = cp.zeros([1,samples],dtype = np.complex128)
+    
+    kernal_ind = cp.arange(cp.ceil(-width),cp.floor(width)+1)
+    kernal_ind = kernal_ind[None,:]
+    k_len = kernal_ind.size
+    for i in range(samples//batch_size + 1):
+        t0 = time.time()
+        batch_size = batch_ind.size
+        batch_ind = cp.arange(i*batch_size,cp.minimum((i+1)*batch_size,samples))
+        rind_x = cp.round(kx[batch_ind][:,None]+kernal_ind).astype(cp.int32)
+        rind_y = cp.round(ky[batch_ind][:,None]+kernal_ind).astype(cp.int32)
+        rind_z = cp.round(kz[batch_ind][:,None]+kernal_ind).astype(cp.int32)
+        
+        wx = KB_weight_gpu(cp.abs(rind_x-kx[batch_ind][:,None]),kb_g,width)
+        wy = KB_weight_gpu(cp.abs(rind_y-ky[batch_ind][:,None]),kb_g,width)
+        wz = KB_weight_gpu(cp.abs(rind_z-kz[batch_ind][:,None]),kb_g,width)
+        
+        # N*x*y*z
+        w = wx[:,:,None,None]*wy[:,None,:,None]*wz[:,None,None,:]
+        
+        # limit all the gridding points in the grid
+        aind_x = (cp.minimum(cp.maximum(rind_x[:,:,None,None],grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])
+        aind_y = (cp.minimum(cp.maximum(rind_y[:,None,:,None],grid_r[1,0]),grid_r[1,1]-1) - grid_r[1,0])
+        aind_z = (cp.minimum(cp.maximum(rind_z[:,None,None,:],grid_r[2,0]),grid_r[2,1]-1) - grid_r[2,0])
+        w_mask = (aind_x == rind_x[:,:,None,None]-grid_r[0,0])*(aind_y == rind_y[:,None,:,None]-grid_r[1,0])*(aind_z == rind_z[:,None,None,:]-grid_r[2,0])
+        w = w*w_mask
+        
+        strides_ind = shape_stride[0]*aind_x + shape_stride[1]*aind_y + shape_stride[2]*aind_z
+        strides_ind = strides_ind.reshape([batch_size,-1])
+        data_n[0,batch_ind] = cp.sum(w.reshape([batch_size,-1])*data_c[strides_ind],axis=1)
+        
+        print('Batch Grid time:',time.time()-t0)
+        
+    return data_n
 
 def grid(samples, traj, data_c, grid_r, width, batch_size = 500000):
     # samples: int(N), num of sample
