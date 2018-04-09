@@ -151,7 +151,7 @@ def gridH(samples, traj, data_n, grid_r, width, batch_size = 1000000):
     
     for i in range(samples//batch_size + 1):
         t0 = time.time()
-        batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
+        batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples-1))
         rind_x = np.round(kx[batch_ind][:,None]+kernal_ind).astype(np.int32)
         rind_y = np.round(ky[batch_ind][:,None]+kernal_ind).astype(np.int32)
         rind_z = np.round(kz[batch_ind][:,None]+kernal_ind).astype(np.int32)
@@ -204,7 +204,7 @@ def grid(samples, traj, data_c, grid_r, width, batch_size = 500000):
     for i in range(samples//batch_size + 1):
         t0 = time.time()
         batch_size = batch_ind.size
-        batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
+        batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples-1))
         rind_x = np.round(kx[batch_ind][:,None]+kernal_ind).astype(np.int32)
         rind_y = np.round(ky[batch_ind][:,None]+kernal_ind).astype(np.int32)
         rind_z = np.round(kz[batch_ind][:,None]+kernal_ind).astype(np.int32)
@@ -253,7 +253,7 @@ def gTg2(samples, traj, data_c, grid_r, width, pattern = None, batch_size = 5000
     k_len = kernal_ind.size
     for i in range(samples//batch_size + 1):
         t0 = time.time()
-        batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
+        batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples-1))
         batch_size = batch_ind.size
         rind_x = np.round(kx[batch_ind][:,None]+kernal_ind).astype(np.int32)
         rind_y = np.round(ky[batch_ind][:,None]+kernal_ind).astype(np.int32)

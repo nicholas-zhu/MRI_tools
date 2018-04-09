@@ -23,7 +23,7 @@ import cupy as cp
 #     extend to GPU
 
 kb_table = kb128.kb128
-kb_table = kb128.kb128_2
+kb_table2 = kb128.kb128_2
 
 class NUFFT3D():
     def __init__(self, traj, grid_r = None, os = 1.3, pattern = None, width = 3):
@@ -76,7 +76,7 @@ class NUFFT3D():
 
     
 def KB_compensation(grid_r, width):
-    kb_t = kb_table
+    kb_t = kb_table2
     win = np.zeros([grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]],dtype = np.complex128)
     c_ind = -grid_r[:,0]
     win_L = (np.ceil(-width)).astype(np.int32)
@@ -121,15 +121,12 @@ def gridH_sum(data_t,index_s,data_s,N):
         
     return data_t   
 
-def KB_weight(grid, kb_table, width):
+def KB_weight(grid, kb_2, width):
     # grid [N,2*width] kb_table[128]
-    scale = (width)/(kb_table.size-1)
+    scale = (width)/(kb_2.shape[0]-1)
     frac = np.minimum(np.abs(grid)/scale,kb_table.size-2)
     (frac,grid_s) = np.modf(frac)
     
-    # shift table [KB(n),KB(n+1)]
-    kb_2 = np.stack((kb_table,np.roll(kb_table,-1,axis=0)),axis=1)
-    kb_2[-1,1]=0
     
     w= np.sum(np.stack(((1-frac),frac),axis=2)*kb_2[grid_s.astype(int),:],axis=2)
     return w
@@ -193,6 +190,7 @@ def gridH(samples, traj, data_n, grid_r, width, batch_size = 1000000):
 
         strides_ind = shape_stride[0]*aind_x + shape_stride[1]*aind_y + shape_stride[2]*aind_z
         strides_ind = strides_ind.ravel()
+        print(wx.shape,data_n.shape,samples)
         wdata_n = (w*data_n[batch_ind][:,None,None,None]).ravel()
         
         #np.add.at(data_c,v_ind,wdata_n)
