@@ -136,8 +136,6 @@ def gridH_gpu(samples, traj, data_n, grid_r, width, batch_size):
     # width: Half length of KB window
     # batch_size: limit memory use
     # kb_t = kb_table
-    
-    
     kb_g  = cp.asarray(kb_table2)
     
     # preparation
@@ -201,22 +199,20 @@ def gridH_gpu(samples, traj, data_n, grid_r, width, batch_size):
                 cp.scatter_add(data_cr,strides_ind,cp.real(wdata_n))
 
                 # back to host
-                data_c[:,nC,nP] = data_c[:,nC,nP]+cp.asnumpy(data_cr + 1j*data_ci)
+                data_c[:,nC,nP] += cp.asnumpy(data_cr + 1j*data_ci)
             # timing
             print('Batch Grid time:',time.time()-t0)
     # back to host
     data_c = data_c.reshape(shape_grid+[nCoil,1,nPhase])
     return data_c
 
-def grid_gpu(samples, traj, data_c, grid_r, width, batch_size):
+def grid_gpu(samples, traj, data_c, grid_r, width, batch_size, pattern = None):
     # samples: int(N), num of sample
     # traj: [3,N,1,1,1,nbin],non-scaled trajectory
     # data_c: [X,Y,Z,nC,1,nbin],noncart data
     # grid_r: [2,3] 3D grid range
     # width: Half length of KB window
     # batch_size: limit memory use
-    # kb_t = kb_table
-    
     kb_g  = cp.asarray(kb_table2)
     
     # preparation
@@ -278,3 +274,91 @@ def grid_gpu(samples, traj, data_c, grid_r, width, batch_size):
     print('Grid time:',time.time()-t0)
     data_n = data_n.reshape([3,samples,1,nCoil,1,nPhase])
     return data_n
+
+def gTg2_gpu( index_t,data_s,weight,pattern,N):
+    # gpu based Toepliz gridding
+    # data_t: [N_t*1] target data
+    # index_s: [N_s*L] sample to target data index
+    # data_s: [N_s*L*1,nParallel] sample data
+    # weight: [N_s*L] KB_win
+    # pattern: [N_index] density
+    
+    data_t = np.zeros([data_s.shape[0],data_s.shape[3]])
+    if pattern.size == 1:
+        for i in range(N):
+            index = index_t[i,:]
+            data_st = cp.asarray(data_s[i,:,:])
+            data_t[index,:] += cp.asnumpy(cp.sum(data_st*weight[i,:])*weight[i,:])
+    else:
+        for i in range(N):
+            index = index_t[i,:]
+            data_t[index] += np.sum(data_s[i,:]*weight[i,:])*weight[i,:]*pattern[i]
+        
+    return data_t
+
+def gTg_gpu(samples, traj, data_c, grid_r, width, batch_size):
+    # samples: int(N), num of sample
+    # traj: [3,N,1,1,1,nbin],non-scaled trajectory
+    # data_c: [X,Y,Z,nC,1,nbin],noncart data
+    # grid_r: [2,3] 3D grid range
+    # width: Half length of KB window
+    # batch_size: limit memory use
+    kb_g  = cp.asarray(kb_table2)
+    
+    # preparation
+    nCoil = data_c[3]
+    nPhase = np.prod(data_c.shape[Pdim:])
+    assert nPhase == traj.shape[Pdim], " Data and Trajectory nPhase mismatch "
+    shape_grid = [grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]]
+    shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
+    kernal_ind = cp.arange(np.ceil(-width),np.floor(width)+1)
+    kernal_ind = kernal_ind[None,:]
+    k_len = kernal_ind.size
+    
+    # data cartesian
+    data_c = np.reshape(data_c,[np.prod(shape_grid),1,nCoil,nPhase])
+    data_ct = np.zeros_like(data_c)
+    
+    for nP in range(nPhase):
+        for i in range(samples//batch_size + 1):
+            batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
+            batch_ind2 = cp.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
+            # load data into GPU from host
+            
+
+            kx = cp.asarray(traj[0,batch_ind,:,0,0,nP])
+            ky = cp.asarray(traj[1,batch_ind,:,0,0,nP])
+            kz = cp.asarray(traj[2,batch_ind,:,0,0,nP])
+
+            rind_x = cp.rint(kx+kernal_ind).astype(cp.int32)
+            rind_y = cp.rint(ky+kernal_ind).astype(cp.int32)
+            rind_z = cp.rint(kz+kernal_ind).astype(cp.int32)
+
+            wx = KB_weight_gpu(cp.abs(rind_x-kx),kb_g,width)
+            wy = KB_weight_gpu(cp.abs(rind_y-ky),kb_g,width)
+            wz = KB_weight_gpu(cp.abs(rind_z-kz),kb_g,width)
+
+            # N*x*y*z
+            w = wx[:,:,None,None]*wy[:,None,:,None]*wz[:,None,None,:]
+            w = cp.reshape(w,(batch_ind.size,-1))
+
+            # limit all the gridding points in the grid
+            aind_x = (cp.minimum(cp.maximum(rind_x[:,:,None,None],grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])
+            aind_y = (cp.minimum(cp.maximum(rind_y[:,None,:,None],grid_r[1,0]),grid_r[1,1]-1) - grid_r[1,0])
+            aind_z = (cp.minimum(cp.maximum(rind_z[:,None,None,:],grid_r[2,0]),grid_r[2,1]-1) - grid_r[2,0])
+
+            w_mask = (aind_x == rind_x[:,:,None,None]-grid_r[0,0])*(aind_y == rind_y[:,None,:,None]-grid_r[1,0])*(aind_z == rind_z[:,None,None,:]-grid_r[2,0])
+            w = w*w_mask
+            w = cp.reshape(w,[batch_ind.size,-1,1])
+            
+            strides_ind = shape_stride[0]*aind_x + shape_stride[1]*aind_y + shape_stride[2]*aind_z
+            strides_ind = strides_ind.reshape([batch_size,-1])
+            
+            if pattern is None:
+                data_ct[:,0,:,nP] += gTg2_gpu(strides_ind,data_c[:,0,:,nP],w,np.array([1]),batch_ind.size)
+            else:
+                data_ct[:,0,:,nP] += gTg2_gpu(strides_ind,data_c[:,0,:,nP],w,pattern,batch_ind.size)
+
+    data_ct = data_ct.reshape(shape_grid+[nCoil,1,nPhase])
+    return data_ct
+                
