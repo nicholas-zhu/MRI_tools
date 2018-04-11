@@ -26,13 +26,15 @@ kb_table = kb128.kb128
 kb_table2 = kb128.kb128_2
 
 class NUFFT3D():
-    def __init__(self, traj, grid_r = None, os = 1.3, pattern = None, width = 3):
+    def __init__(self, traj, grid_r = None, os = 1, pattern = None, width = 3):
         self.traj = os*np.reshape(traj,[3,-1])
         self.samples = (self.traj).shape[1]
         if grid_r is None:
             self.grid_r = (np.stack([np.floor(np.min(self.traj,axis=1))-width, np.ceil(np.max(self.traj,axis=1))+width],axis=1)).astype(np.int32)
-            grid_L = np.abs(np.floor(np.min(self.traj,axis=1))-width)
-            grid_H = np.abs(np.ceil(np.max(self.traj,axis=1))+width)
+            #grid_L = np.abs(np.floor(np.min(self.traj,axis=1))-width)
+            #grid_H = np.abs(np.ceil(np.max(self.traj,axis=1))+width)
+            grid_L = np.abs(np.floor(np.min(self.traj,axis=1)))
+            grid_H = np.abs(np.ceil(np.max(self.traj,axis=1)))
             grid_r = np.maximum(grid_L,grid_H)
             self.grid_r = (np.stack([-grid_r,grid_r],axis=1)).astype(np.int32)
             print('Est. kspace size:',self.grid_r)
@@ -54,13 +56,19 @@ class NUFFT3D():
         
         return data_n
         
-    def adjoint(self,data_n,w_flag = False):
+    def adjoint(self,data_n,w_flag = False,gpu_flag = False):
         data_n = np.reshape(data_n,[1,-1])
-        if self.p is None :
-            data_c = gridH(self.samples,self.traj, data_n, self.grid_r, width =self.width)
+        if gpu_flag is False:
+            if self.p is None :
+                data_c = gridH(self.samples,self.traj, data_n, self.grid_r, width =self.width)
+            else:
+                data_c = gridH(self.samples,self.traj, data_n*self.p, self.grid_r, width = self.width)
         else:
-            data_c = gridH(self.samples,self.traj, data_n*self.p, self.grid_r, width = self.width)
-        img_hc = self.A.IFT(data_c)
+            if self.p is None :
+                data_c = gridH_gpu(self.samples,self.traj, data_n, self.grid_r, width =self.width)
+            else:
+                data_c = gridH_gpu(self.samples,self.traj, data_n*self.p, self.grid_r, width = self.width)
+        img_hc = self.A.IFT(data_c)/self.KB_win
         return img_hc
     
     def Toeplitz(self,img_c):
@@ -199,7 +207,7 @@ def gridH(samples, traj, data_n, grid_r, width, batch_size = 1000000):
     data_c = data_c.reshape(shape_grid)
     return data_c
 
-def gridH_gpu(samples, traj, data_n, grid_r, width, batch_size = 1000000):
+def gridH_gpu(samples, traj, data_n, grid_r, width, batch_size = 500000):
     # samples: int(N), num of sample
     # traj: [3,N],non-scaled trajectory
     # data_n: [1,N],noncart data
@@ -211,7 +219,6 @@ def gridH_gpu(samples, traj, data_n, grid_r, width, batch_size = 1000000):
     data_n_g = cp.asarray(data_n.ravel())
     samples_g = cp.asarray(samples)
     traj_g = cp.asarray(traj)
-    grid_r_g = cp.asarray(grid_r)
     kb_g  = cp.asarray(kb_table2)
     
     kx = traj_g[0,:]
@@ -219,20 +226,22 @@ def gridH_gpu(samples, traj, data_n, grid_r, width, batch_size = 1000000):
     kz = traj_g[2,:]
     
     
-    shape_grid = [grid_r_g[0,1]-grid_r_g[0,0],grid_r_g[1,1]-grid_r_g[1,0],grid_r_g[2,1]-grid_r_g[2,0]]
+    shape_grid = [grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]]
     shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
-    data_c = cp.zeros(cp.prod(shape_grid),dtype = np.complex128)
+    # atomic add did not support complex
+    data_cr = cp.zeros([np.prod(np.array(shape_grid))],dtype = cp.float32)
+    data_ci = cp.zeros([np.prod(np.array(shape_grid))],dtype = cp.float32)
     
-    kernal_ind = cp.arange(cp.ceil(-width),cp.floor(width)+1)
+    kernal_ind = cp.arange(np.ceil(-width),np.floor(width)+1)
     kernal_ind = kernal_ind[None,:]
     k_len = kernal_ind.size
     
-    for i in range(samples_g//batch_size + 1):
+    for i in range(samples//batch_size + 1):
         t0 = time.time()
-        batch_ind = cp.arange(i*batch_size,cp.minimum((i+1)*batch_size,samples_g))
-        rind_x = cp.round(kx[batch_ind][:,None]+kernal_ind).astype(cp.int32)
-        rind_y = cp.round(ky[batch_ind][:,None]+kernal_ind).astype(cp.int32)
-        rind_z = cp.round(kz[batch_ind][:,None]+kernal_ind).astype(cp.int32)
+        batch_ind = cp.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
+        rind_x = cp.rint(kx[batch_ind][:,None]+kernal_ind).astype(cp.int32)
+        rind_y = cp.rint(ky[batch_ind][:,None]+kernal_ind).astype(cp.int32)
+        rind_z = cp.rint(kz[batch_ind][:,None]+kernal_ind).astype(cp.int32)
         
         wx = KB_weight_gpu(cp.abs(rind_x-kx[batch_ind][:,None]),kb_g,width)
         wy = KB_weight_gpu(cp.abs(rind_y-ky[batch_ind][:,None]),kb_g,width)
@@ -242,23 +251,27 @@ def gridH_gpu(samples, traj, data_n, grid_r, width, batch_size = 1000000):
         w = wx[:,:,None,None]*wy[:,None,:,None]*wz[:,None,None,:]
         
         # limit all the gridding points in the grid
-        aind_x = (cp.minimum(cp.maximum(rind_x[:,:,None,None],grid_r_g[0,0]),grid_r_g[0,1]-1) - grid_r_g[0,0])
-        aind_y = (cp.minimum(cp.maximum(rind_y[:,None,:,None],grid_r_g[1,0]),grid_r_g[1,1]-1) - grid_r_g[1,0])
-        aind_z = (cp.minimum(cp.maximum(rind_z[:,None,None,:],grid_r_g[2,0]),grid_r_g[2,1]-1) - grid_r_g[2,0])
-        #w_mask = (aind_x == rind_x[:,:,None,None]-grid_r[0,0])*(aind_y == rind_y[:,None,:,None]-grid_r[1,0])*(aind_z == rind_z[:,None,None,:]-grid_r[2,0])
-        #w = w*w_mask
+        aind_x = (cp.minimum(cp.maximum(rind_x[:,:,None,None],grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])
+        aind_y = (cp.minimum(cp.maximum(rind_y[:,None,:,None],grid_r[1,0]),grid_r[1,1]-1) - grid_r[1,0])
+        aind_z = (cp.minimum(cp.maximum(rind_z[:,None,None,:],grid_r[2,0]),grid_r[2,1]-1) - grid_r[2,0])
+        w_mask = (aind_x == rind_x[:,:,None,None]-grid_r[0,0])*(aind_y == rind_y[:,None,:,None]-grid_r[1,0])*(aind_z == rind_z[:,None,None,:]-grid_r[2,0])
+        w = w*w_mask
 
         strides_ind = shape_stride[0]*aind_x + shape_stride[1]*aind_y + shape_stride[2]*aind_z
         strides_ind = strides_ind.ravel()
         wdata_n = (w*data_n_g[batch_ind][:,None,None,None]).ravel()
         
         #np.add.at(data_c,strides_ind,wdata_n)
-        cp.scatter_add(data_c,strides_ind,wdata_n)
+        print(data_cr.shape,strides_ind.shape,wdata_n.shape)
+        cp.scatter_add(data_ci,strides_ind,cp.imag(wdata_n))
+        cp.scatter_add(data_cr,strides_ind,cp.real(wdata_n))
         #gridH_sum(data_c,strides_ind,wdata_n,strides_ind.size)
         print('Batch Grid time:',time.time()-t0)
         
+    # back to host
+    data_c = cp.asnumpy(data_cr) + 1j*cp.asnumpy(data_ci)
     data_c = data_c.reshape(shape_grid)
-    return cp.asnumpy(data_c)
+    return data_c
 
 
 def grid_gpu(samples, traj, data_c, grid_r, width, batch_size = 500000):
