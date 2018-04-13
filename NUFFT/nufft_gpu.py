@@ -85,7 +85,7 @@ class NUFFT3D():
     
     def Toeplitz(self,img_c):
         data_c = self.A.FT(img_c)
-        data_ct = gTg2(self.samples,self.traj, data_c, self.grid_r, self.width, pattern = self.p)
+        data_ct = gTg_gpu(self.samples,self.traj, data_c, self.grid_r, self.width, self.seg, self.p)
         img_ct = self.A.IFT(data_ct)
         return img_ct
 
@@ -140,7 +140,7 @@ def gridH_gpu(samples, traj, data_n, grid_r, width, batch_size):
     
     # preparation
     nCoil = data_n.shape[3]
-    nPhase = np.prod(data_n.shape[Pdim:])
+    nPhase = np.prod(data_n.shape[Pdim:]).astype(np.int32)
     assert nPhase == traj.shape[Pdim], " Data and Trajectory nPhase mismatch "
     assert samples == data_n.shape[1] * data_n.shape[2], " Data and Trajectory sample mismatch "
     shape_grid = [grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]]
@@ -216,8 +216,8 @@ def grid_gpu(samples, traj, data_c, grid_r, width, batch_size, pattern = None):
     kb_g  = cp.asarray(kb_table2)
     
     # preparation
-    nCoil = data_c[3]
-    nPhase = np.prod(data_c.shape[Pdim:])
+    nCoil = data_c.shape[3]
+    nPhase = np.prod(data_c.shape[Pdim:]).astype(np.int32)
     assert nPhase == traj.shape[Pdim], " Data and Trajectory nPhase mismatch "
     shape_grid = [grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]]
     shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
@@ -227,7 +227,7 @@ def grid_gpu(samples, traj, data_c, grid_r, width, batch_size, pattern = None):
     
     # data cartesian
     data_n = np.zeros([1,samples,1,nCoil,nPhase],dtype = np.complex64)
-    data_c = np.reshape(data_c,[np.prod(shape_grid),1,nCoil,nPhase])
+    data_c = np.reshape(data_c,[np.prod(np.array(shape_grid)),1,nCoil,nPhase])
     #GPU domain
     t0 = time.time()
     # all dimensions change:
@@ -279,24 +279,28 @@ def gTg2_gpu( index_t,data_s,weight,pattern,N):
     # gpu based Toepliz gridding
     # data_t: [N_t*1] target data
     # index_s: [N_s*L] sample to target data index
-    # data_s: [N_s*L*1,nParallel] sample data
+    # data_s: [N_s,1,nParallel] sample data
     # weight: [N_s*L] KB_win
     # pattern: [N_index] density
     
-    data_t = np.zeros([data_s.shape[0],data_s.shape[3]])
+    data_t = np.zeros_like(data_s)
+    index_c = cp.asnumpy(index_t)
     if pattern.size == 1:
         for i in range(N):
-            index = index_t[i,:]
+            index = index_c[i,:]
             data_st = cp.asarray(data_s[i,:,:])
-            data_t[index,:] += cp.asnumpy(cp.sum(data_st*weight[i,:])*weight[i,:])
+            wt = weight[i,:][:,None]
+            data_t[index,:] += cp.asnumpy(cp.sum(data_st*wt,axis=0)*wt)
     else:
         for i in range(N):
-            index = index_t[i,:]
-            data_t[index] += np.sum(data_s[i,:]*weight[i,:])*weight[i,:]*pattern[i]
+            index = index_c[i,:]
+            data_st = cp.asarray(data_s[i,:,:])
+            wt = weight[i,:][:,None]
+            data_t[index,:,:] += cp.asnumpy(cp.sum(data_st*wt,axis=0)*wt)*pattern[i]
         
     return data_t
 
-def gTg_gpu(samples, traj, data_c, grid_r, width, batch_size):
+def gTg_gpu(samples, traj, data_c, grid_r, width, batch_size, pattern):
     # samples: int(N), num of sample
     # traj: [3,N,1,1,1,nbin],non-scaled trajectory
     # data_c: [X,Y,Z,nC,1,nbin],noncart data
@@ -306,8 +310,8 @@ def gTg_gpu(samples, traj, data_c, grid_r, width, batch_size):
     kb_g  = cp.asarray(kb_table2)
     
     # preparation
-    nCoil = data_c[3]
-    nPhase = np.prod(data_c.shape[Pdim:])
+    nCoil = data_c.shape[3]
+    nPhase = np.prod(data_c.shape[Pdim:]).astype(np.int32)
     assert nPhase == traj.shape[Pdim], " Data and Trajectory nPhase mismatch "
     shape_grid = [grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]]
     shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
@@ -315,14 +319,16 @@ def gTg_gpu(samples, traj, data_c, grid_r, width, batch_size):
     kernal_ind = kernal_ind[None,:]
     k_len = kernal_ind.size
     
-    # data cartesian
-    data_c = np.reshape(data_c,[np.prod(shape_grid),1,nCoil,nPhase])
+    # data cartesion
+    print(np.prod(shape_grid),nCoil,nPhase)
+    data_c = np.reshape(data_c,[np.prod(np.array(shape_grid)),1,nCoil,nPhase])
     data_ct = np.zeros_like(data_c)
     
+    t0 = time.time()
     for nP in range(nPhase):
         for i in range(samples//batch_size + 1):
             batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
-            batch_ind2 = cp.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
+            # batch_ind2 = cp.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
             # load data into GPU from host
             
 
@@ -340,7 +346,7 @@ def gTg_gpu(samples, traj, data_c, grid_r, width, batch_size):
 
             # N*x*y*z
             w = wx[:,:,None,None]*wy[:,None,:,None]*wz[:,None,None,:]
-            w = cp.reshape(w,(batch_ind.size,-1))
+            # w = cp.reshape(w,(batch_ind.size,-1))
 
             # limit all the gridding points in the grid
             aind_x = (cp.minimum(cp.maximum(rind_x[:,:,None,None],grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])
@@ -355,10 +361,10 @@ def gTg_gpu(samples, traj, data_c, grid_r, width, batch_size):
             strides_ind = strides_ind.reshape([batch_size,-1])
             
             if pattern is None:
-                data_ct[:,0,:,nP] += gTg2_gpu(strides_ind,data_c[:,0,:,nP],w,np.array([1]),batch_ind.size)
+                data_ct[:,:,:,nP] += gTg2_gpu(strides_ind,data_c[:,:,:,nP],w,np.array([1]),batch_ind.size)
             else:
-                data_ct[:,0,:,nP] += gTg2_gpu(strides_ind,data_c[:,0,:,nP],w,pattern,batch_ind.size)
-
+                data_ct[:,:,:,nP] += gTg2_gpu(strides_ind,data_c[:,:,:,nP],w,pattern,batch_ind.size)
+            print('Batch Toepliz time:',time.time()-t0)
     data_ct = data_ct.reshape(shape_grid+[nCoil,1,nPhase])
     return data_ct
                 
