@@ -27,7 +27,7 @@ Pdim = 4 # Parallel Dimension
 Sdim = 3 # Spatial Dimension
 
 class NUFFT3D():
-    def __init__(self, traj, grid_r = None, os = 1, pattern = None, width = 2, seg = 1000000):
+    def __init__(self, traj, grid_r = None, os = 1, pattern = None, width = 2, seg = 500000):
         # trajectory
         self.traj = os*traj
         if np.ndim(self.traj) < Ndim:
@@ -63,7 +63,8 @@ class NUFFT3D():
         if pattern is None:
             self.p = None
         else:
-            self.p = pattern
+            self.p = np.abs(pattern)
+            self.p = np.reshape(self.p,(1, self.samples, 1, 1, 1, self.nPhase))
             
     def forward(self,img_c):
         
@@ -77,13 +78,16 @@ class NUFFT3D():
         if self.p is None :
             data_c = gridH_gpu(self.samples,self.traj, data_n, self.grid_r, self.width, self.seg)
         else:
-            data_c = gridH_gpu(self.samples,self.traj, data_n*self.p, self.grid_r, self.width, self.seg)
+            print(data_n.shape,self.p.shape);
+            data_nw = data_n*self.p
+            data_c = gridH_gpu(self.samples,self.traj, data_nw, self.grid_r, self.width, self.seg)
             
         img_hc = self.A.IFT(data_c)/self.KB_win
         
         return img_hc
     
     def Toeplitz(self,img_c):
+        # faster testing 
         data_c = self.A.FT(img_c)
         data_ct = gTg_gpu(self.samples,self.traj, data_c, self.grid_r, self.width, self.seg, self.p)
         img_ct = self.A.IFT(data_ct)
@@ -253,7 +257,6 @@ def grid_gpu(samples, traj, data_c, grid_r, width, batch_size, pattern = None):
 
             # N*x*y*z
             w = wx[:,:,None,None]*wy[:,None,:,None]*wz[:,None,None,:]
-            w = cp.reshape(w,(batch_ind.size,-1))
 
             # limit all the gridding points in the grid
             aind_x = (cp.minimum(cp.maximum(rind_x[:,:,None,None],grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])
@@ -265,17 +268,50 @@ def grid_gpu(samples, traj, data_c, grid_r, width, batch_size, pattern = None):
             w = cp.reshape(w,[batch_ind.size,-1])
             
             strides_ind = shape_stride[0]*aind_x + shape_stride[1]*aind_y + shape_stride[2]*aind_z
-            strides_ind = strides_ind.reshape([batch_size,-1])
-            data_ct = cp.asarray(data_c[strides_ind,0,:,nP])
-            data_n[0,batch_ind,0,:,nP] = cp.asnumpy(cp.sum(w.reshape([batch_size,-1,1])*data_ct,axis=1))
+            strides_ind = strides_ind.reshape([batch_ind.size,-1])
+            strides_indt = cp.asnumpy(strides_ind)
+            data_ct = data_c[strides_indt,0,:,nP]
+            data_n[0,batch_ind,0,:,nP] = np.sum(cp.asnumpy(w.reshape([batch_ind.size,-1,1]))*data_ct,axis=1)
 
 
-    # timing
-    print('Grid time:',time.time()-t0)
+            # timing
+            print('Grid time:',time.time()-t0)
     data_n = data_n.reshape([3,samples,1,nCoil,1,nPhase])
     return data_n
 
 def gTg2_gpu( index_t,data_s,weight,pattern,N):
+    # gpu based Toepliz gridding
+    # data_t: [N_t*1] target data
+    # index_t: [N_s*L] sample to target data index
+    # data_s: [N_s,1,nParallel] sample data
+    # weight: [N_s*L] KB_win
+    # pattern: [N_index] density
+    #     data_t = WT*W*data_s
+    #     6G GPU limitation
+    
+    data_t = np.zeros_like(data_s)
+    index_c = cp.asnumpy(index_t)
+    if pattern is not None:
+        pattern_t = cp.asarray(pattern).reshape([-1,1])
+    
+    for i in range(data_s.shape[2]):
+        data_ci = cp.zeros(data_s.shape[0],dtype=np.float32)
+        data_cr = cp.zeros(data_s.shape[0],dtype=np.float32)
+        data_st = cp.asarray(data_s[index_c,0,i],dtype = np.complex64)# [N_nc,L]
+        data_st = cp.sum(data_st*weight,axis = 1,keepdims = True)
+        if pattern is not None:
+            data_st = data_st*pattern_t
+        data_st = data_st*weight
+        
+        cp.scatter_add(data_ci,index_t,cp.imag(data_st))
+        cp.scatter_add(data_cr,index_t,cp.real(data_st))
+        
+        data_t[:,0,i] = cp.asnumpy(data_ci+1j*data_cr)
+        
+    return data_t
+
+
+def gTg3_gpu( index_t,data_s,weight,pattern,N):
     # gpu based Toepliz gridding
     # data_t: [N_t*1] target data
     # index_s: [N_s*L] sample to target data index
@@ -307,12 +343,19 @@ def gTg_gpu(samples, traj, data_c, grid_r, width, batch_size, pattern):
     # grid_r: [2,3] 3D grid range
     # width: Half length of KB window
     # batch_size: limit memory use
+    # pattern:[1,N,1,1,1,nbin]
+    
+    
     kb_g  = cp.asarray(kb_table2)
     
     # preparation
     nCoil = data_c.shape[3]
     nPhase = np.prod(data_c.shape[Pdim:]).astype(np.int32)
     assert nPhase == traj.shape[Pdim], " Data and Trajectory nPhase mismatch "
+    if pattern is not None:
+        assert traj.shape[1:] == pattern.shape[1:], " Trajectory and Pattern shape mismatch"
+        pattern = pattern.reshape([samples,1,nPhase])
+        
     shape_grid = [grid_r[0,1]-grid_r[0,0],grid_r[1,1]-grid_r[1,0],grid_r[2,1]-grid_r[2,0]]
     shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
     kernal_ind = cp.arange(np.ceil(-width),np.floor(width)+1)
@@ -320,7 +363,7 @@ def gTg_gpu(samples, traj, data_c, grid_r, width, batch_size, pattern):
     k_len = kernal_ind.size
     
     # data cartesion
-    print(np.prod(shape_grid),nCoil,nPhase)
+    data_c = np.reshape(data_c,[np.prod(np.array(shape_grid)),1,nCoil,nPhase])
     data_c = np.reshape(data_c,[np.prod(np.array(shape_grid)),1,nCoil,nPhase])
     data_ct = np.zeros_like(data_c)
     
@@ -355,15 +398,17 @@ def gTg_gpu(samples, traj, data_c, grid_r, width, batch_size, pattern):
 
             w_mask = (aind_x == rind_x[:,:,None,None]-grid_r[0,0])*(aind_y == rind_y[:,None,:,None]-grid_r[1,0])*(aind_z == rind_z[:,None,None,:]-grid_r[2,0])
             w = w*w_mask
-            w = cp.reshape(w,[batch_ind.size,-1,1])
+            
+            w = cp.reshape(w,[batch_ind.size,-1])
             
             strides_ind = shape_stride[0]*aind_x + shape_stride[1]*aind_y + shape_stride[2]*aind_z
-            strides_ind = strides_ind.reshape([batch_size,-1])
+            print(strides_ind.shape,w.shape,batch_ind.size,aind_z.shape)
+            strides_ind = strides_ind.reshape([batch_ind.size,-1])
             
             if pattern is None:
                 data_ct[:,:,:,nP] += gTg2_gpu(strides_ind,data_c[:,:,:,nP],w,np.array([1]),batch_ind.size)
             else:
-                data_ct[:,:,:,nP] += gTg2_gpu(strides_ind,data_c[:,:,:,nP],w,pattern,batch_ind.size)
+                data_ct[:,:,:,nP] += gTg2_gpu(strides_ind,data_c[:,:,:,nP],w,pattern[batch_ind,nP],batch_ind.size)
             print('Batch Toepliz time:',time.time()-t0)
     data_ct = data_ct.reshape(shape_grid+[nCoil,1,nPhase])
     return data_ct
