@@ -37,7 +37,7 @@ def MRI_Noise_2d(Img_shape, N, sigma = 1):
     return 1j * Noise_i + Noise_r
     
     
-def MRI_undersample_2d(Img, sampling_rate = .7, full_area = [24,24], N = 100, sigma = 1):
+def MRI_undersample_2d(Img, sampling_rate = .7, full_area = [24,24], N = 10, sigma = 1):
     # Img [nx, ny]
     # random image
     # random phase
