@@ -47,7 +47,7 @@ def MRI_undersample_2d(Img, sampling_rate = .7, full_area = [24,24], N = 10, sig
     FFT = fft.fft(shape=1,axes=(1,2))
     # FFT
     ksp = FFT.FT(Img_true)
-    sigma = np.max(np.abs(ksp.flatten()))
+    sigma = sigma * np.max(np.abs(ksp.flatten()))
     noise = MRI_Noise_2d(Img_shape,N,sigma = sigma)
     Mask = MRI_mask_2d(Img_shape, sampling_rate, full_area, N)
     Img_out = FFT.IFT((ksp+noise)*Mask)
