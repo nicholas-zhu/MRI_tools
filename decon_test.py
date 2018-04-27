@@ -99,7 +99,6 @@ with tf.Session(config=config) as sess:
     test_summary_writer = tf.summary.FileWriter(output_dir + '/test', sess.graph)
 
     summary_loss = []
-
     for epoch in range(nepoch):
         # data prep
         I0, Id, gx, gy = [],[],[],[]
@@ -134,4 +133,4 @@ with tf.Session(config=config) as sess:
             if i % 10 is 0:
                 print('loss is :',summary_loss_t)
                 summary_loss.append([summary_loss_t])
-		saver.save(sess, output_dir+'/model.ckpy')
+            saver.save(sess, output_dir+'/model.ckpy')
