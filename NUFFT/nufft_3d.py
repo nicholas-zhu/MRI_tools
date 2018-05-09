@@ -5,7 +5,12 @@ from NUFFT import kb128
 from numba import jit
 import time
 
-import cupy as cp
+try:
+    import cupy as cp
+    CUDA_flag = True
+except ImportError:
+    import sqlite3
+    CUDA_flag = False
 
 # grid, gridH operators
 # non cartesian dims:
