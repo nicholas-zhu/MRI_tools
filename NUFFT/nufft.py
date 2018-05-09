@@ -31,7 +31,8 @@ dtpye_n = np.complex64
 
 
 class NUFFT3D():
-    def __init__(self, traj, grid_r = None, os = 1, pattern = None, width = 3, seg = 500000, Toeplitz_flag = False):
+    def __init__(self, traj, grid_r = None, os = 1, pattern = None, width = 3, seg = 500000, Toeplitz_flag = False, CUDA_flag1 = False):
+        self.cuda = CUDA_flag & CUDA_flag1
         # trajectory
         self.traj = os*traj
         if np.ndim(self.traj) < Ndims:
@@ -88,7 +89,7 @@ class NUFFT3D():
         M = np.ones(ndata_shapet)
         if self.p is not None :
             M = M*self.p
-        if CUDA_flag:
+        if self.cuda:
             psf_k = gridH_gpu(self.samples, ndata_shapet, cdata_shapet, self.traj*os, M, self.grid_r*os, self.width, self.seg)
         else:
             psf_k = gridH(self.samples, ndata_shapet, cdata_shapet, self.traj*os, M, self.grid_r*os, self.width, self.seg)
@@ -105,7 +106,7 @@ class NUFFT3D():
         ndata_shapet[Padim-1] = tPa
         cdata_shapet[Padim-1] = tPa
         data_c = self.A.FT(img_c)
-        if CUDA_flag:
+        if self.cuda:
             data_n = grid_gpu(self.samples, ndata_shapet, cdata_shapet, self.traj, data_c, self.grid_r, self.width, self.seg)
         else:
             data_n = grid(self.samples, ndata_shapet, cdata_shapet, self.traj, data_c, self.grid_r, self.width, self.seg)
@@ -121,7 +122,7 @@ class NUFFT3D():
         data_n = np.reshape(data_n,self.ndata_shape)
         if self.p is not None :
             data_n = data_n*self.p
-        if CUDA_flag:
+        if self.cuda:
             data_c = gridH_gpu(self.samples, ndata_shapet, cdata_shapet, self.traj, data_n, self.grid_r, self.width, self.seg)
         else:
             data_c = gridH(self.samples, ndata_shapet, cdata_shapet, self.traj, data_n, self.grid_r, self.width, self.seg)
