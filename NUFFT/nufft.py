@@ -162,7 +162,9 @@ def KB_compensation(grid_r, I_size, width):
     win_k = w[:,None,None]*w[None,:,None]*w[None,None,:]
     win[win_L+c_ind[0]:win_H+c_ind[0],win_L+c_ind[1]:win_H+c_ind[1],win_L+c_ind[2]:win_H+c_ind[2]] = win_k
     return win      
-    
+
+
+@jit()
 def KB_weight(grid, kb_2, width):
     # grid [N,2*width] kb_table[128]
     scale = (width)/(kb_2.shape[0]-1)
@@ -182,38 +184,81 @@ def KB_weight_gpu(grid, kb_2, width):
     w= cp.sum(cp.stack(((1-frac),frac),axis=2)*kb_2[grid_s.astype(int),:],axis=2)
     return w
 
-@jit()
-def grid_weight_calc(kx , ky, kz, grid_r, shape_stride, width):
+@jit(nopython=True,parallel=True)
+def grid_prep(w,rind, k_loc, kernel_ind, width, kb_table):
+    # gridding preparation
+    # output:
+    #  w: weights
+    #  rind: recon index
+    # input:
+    #  k_loc: traj
+    #  kernel_ind: kernel index
+    #  kb_table:
+    
+    N, k_len = w.shape
+    K = kb_table.shape[0]
+    ## change the width scale ##
+    scale = (width+.5)/(K-1)
+    for i in range(k_len):
+        t_ind = kernel_ind[0,i]
+        for k in range(N):
+            rind[k,i] = np.round(k_loc[k,0]+t_ind)
+            wid_t = k_loc[k,0] - rind[k,i] 
+            w[k,i] = kb_table[int(abs(wid_t/scale))]
+            
+    return True
+            
+            
+        
+def grid_weight_calc(kx, ky, kz, grid_r, shape_stride, width):
     # kx,ky,kz: [N,1],non-scaled trajectory
     
     kb  = kb_table2
     batch_size = kx.shape[0]
-    kernal_ind = np.arange(np.ceil(-width),np.floor(width)+1)
-    kernal_ind = kernal_ind[None,:]
-    k_len = kernal_ind.size
+    kernel_ind = np.arange(np.ceil(-width),np.floor(width)+1)
+    kernel_ind = kernel_ind[None,:]
+    k_len = kernel_ind.size
+    
+    # TODO grid_prep(wx,rind_x, kx, kernel_ind, width, kb_table)
+    rind_x = np.zeros((batch_size,k_len))
+    rind_y = np.zeros((batch_size,k_len))
+    rind_z = np.zeros((batch_size,k_len))
+    
+    wx = np.zeros((batch_size,k_len))
+    wy = np.zeros((batch_size,k_len))
+    wz = np.zeros((batch_size,k_len))
+    tflag =  grid_prep(wx,rind_x, kx, kernel_ind, width, kb_table)
+    tflag =  grid_prep(wy,rind_y, ky, kernel_ind, width, kb_table)
+    tflag =  grid_prep(wz,rind_z, kz, kernel_ind, width, kb_table)
+    #rind_x = np.round(kx+kernel_ind)
+    #rind_y = np.round(ky+kernel_ind)
+    #rind_z = np.round(kz+kernel_ind)
 
-    rind_x = np.round(kx+kernal_ind).astype(np.int32)
-    rind_y = np.round(ky+kernal_ind).astype(np.int32)
-    rind_z = np.round(kz+kernal_ind).astype(np.int32)
-
-    wx = KB_weight(np.abs(rind_x-kx),kb,width)
-    wy = KB_weight(np.abs(rind_y-ky),kb,width)
-    wz = KB_weight(np.abs(rind_z-kz),kb,width)
-
-    # N*x*y*z
-    w = wx[:,:,None,None]*wy[:,None,:,None]*wz[:,None,None,:]
+    #wx = KB_weight(np.abs(rind_x-kx),kb,width)
+    #wy = KB_weight(np.abs(rind_y-ky),kb,width)
+    #wz = KB_weight(np.abs(rind_z-kz),kb,width)
 
     # limit all the gridding points in the grid
-    aind_x = (np.minimum(np.maximum(rind_x[:,:,None,None],grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])
-    aind_y = (np.minimum(np.maximum(rind_y[:,None,:,None],grid_r[1,0]),grid_r[1,1]-1) - grid_r[1,0])
-    aind_z = (np.minimum(np.maximum(rind_z[:,None,None,:],grid_r[2,0]),grid_r[2,1]-1) - grid_r[2,0])
+    #aind_x = (np.minimum(np.maximum(rind_x,grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])[:,:,None,None]
+    #aind_y = (np.minimum(np.maximum(rind_y,grid_r[1,0]),grid_r[1,1]-1) - grid_r[1,0])[:,None,:,None]
+    #aind_z = (np.minimum(np.maximum(rind_z,grid_r[2,0]),grid_r[2,1]-1) - grid_r[2,0])[:,None,None,:]
 
-    strides_ind = shape_stride[0]*aind_x + shape_stride[1]*aind_y + shape_stride[2]*aind_z
+    #strides_ind = (shape_stride[0]*aind_x).astype(np.int32) + (shape_stride[1]*aind_y).astype(np.int32) + (shape_stride[2]*aind_z).astype(np.int32)
 
-    w_mask = (aind_x == rind_x[:,:,None,None]-grid_r[0,0])*(aind_y == rind_y[:,None,:,None]-grid_r[1,0])*(aind_z == rind_z[:,None,None,:]-grid_r[2,0])
+    #w_mx = wx[:,:,None,None]*(aind_x == rind_x[:,:,None,None]-grid_r[0,0])
+    #w_my = wy[:,None,:,None]*(aind_y == rind_y[:,None,:,None]-grid_r[1,0])
+    #w_mz = wz[:,None,None,:]*(aind_z == rind_z[:,None,None,:]-grid_r[2,0])
 
-    w = w*w_mask
-    w = np.reshape(w,[batch_size,-1]).astype(np.float32)
+    # w = w_mx*w_my*w_mz
+    aind_x = (shape_stride[0]*(np.minimum(np.maximum(rind_x,grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])).astype(np.int32)
+    aind_y = (shape_stride[1]*(np.minimum(np.maximum(rind_y,grid_r[1,0]),grid_r[1,1]-1) - grid_r[1,0])).astype(np.int32)
+    aind_z = (shape_stride[2]*(np.minimum(np.maximum(rind_z,grid_r[2,0]),grid_r[2,1]-1) - grid_r[2,0])).astype(np.int32)
+    #
+    strides_ind = np.zeros((batch_size,k_len,k_len,k_len),dtype=np.int32)
+    strides_ind = nu1.badd3(strides_ind,aind_x,aind_y,aind_z)
+    w = np.zeros((batch_size,k_len,k_len,k_len))
+    w = nu1.btimes3(w,wx,wy,wz)
+    w = np.reshape(w,[batch_size,-1])
     strides_ind = np.reshape(strides_ind,[batch_size,-1])
     
     return w, strides_ind
@@ -237,9 +282,9 @@ def grid_gpu(samples, ndata_shape, cdata_shape, traj, data_c, grid_r, width, bat
     
     shape_grid = cdata_shape[0:Sdim]
     shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
-    kernal_ind = cp.arange(np.ceil(-width),np.floor(width)+1)
-    kernal_ind = kernal_ind[None,:]
-    k_len = kernal_ind.size
+    kernel_ind = cp.arange(np.ceil(-width),np.floor(width)+1)
+    kernel_ind = kernel_ind[None,:]
+    k_len = kernel_ind.size
     
     # data cartesian
     data_n = np.zeros(ndata_shape,dtype = np.complex64)
@@ -258,9 +303,9 @@ def grid_gpu(samples, ndata_shape, cdata_shape, traj, data_c, grid_r, width, bat
             ky = cp.asarray(traj[1,batch_ind,:,0,nP])
             kz = cp.asarray(traj[2,batch_ind,:,0,nP])
 
-            rind_x = cp.rint(kx+kernal_ind).astype(cp.int32)
-            rind_y = cp.rint(ky+kernal_ind).astype(cp.int32)
-            rind_z = cp.rint(kz+kernal_ind).astype(cp.int32)
+            rind_x = cp.rint(kx+kernel_ind).astype(cp.int32)
+            rind_y = cp.rint(ky+kernel_ind).astype(cp.int32)
+            rind_z = cp.rint(kz+kernel_ind).astype(cp.int32)
 
             wx = KB_weight_gpu(cp.abs(rind_x-kx),kb_g,width)
             wy = KB_weight_gpu(cp.abs(rind_y-ky),kb_g,width)
@@ -312,9 +357,9 @@ def gridH_gpu(samples, ndata_shape, cdata_shape, traj, data_n, grid_r, width, ba
     shape_grid = cdata_shape[0:Sdim]
     print(shape_grid)
     shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
-    kernal_ind = cp.arange(np.ceil(-width),np.floor(width)+1)
-    kernal_ind = kernal_ind[None,:]
-    k_len = kernal_ind.size
+    kernel_ind = cp.arange(np.ceil(-width),np.floor(width)+1)
+    kernel_ind = kernel_ind[None,:]
+    k_len = kernel_ind.size
     
     # data cartesian
     data_c = np.zeros([np.prod(np.array(shape_grid)),1,nCoil,nPhase],dtype = np.complex64)
@@ -333,9 +378,9 @@ def gridH_gpu(samples, ndata_shape, cdata_shape, traj, data_n, grid_r, width, ba
             ky = cp.asarray(traj[1,batch_ind,:,0,nP])
             kz = cp.asarray(traj[2,batch_ind,:,0,nP])
 
-            rind_x = cp.rint(kx+kernal_ind).astype(cp.int32)
-            rind_y = cp.rint(ky+kernal_ind).astype(cp.int32)
-            rind_z = cp.rint(kz+kernal_ind).astype(cp.int32)
+            rind_x = cp.rint(kx+kernel_ind).astype(cp.int32)
+            rind_y = cp.rint(ky+kernel_ind).astype(cp.int32)
+            rind_z = cp.rint(kz+kernel_ind).astype(cp.int32)
 
             wx = KB_weight_gpu(cp.abs(rind_x-kx),kb_g,width)
             wy = KB_weight_gpu(cp.abs(rind_y-ky),kb_g,width)
@@ -389,9 +434,9 @@ def gridH(samples, ndata_shape, cdata_shape, traj, data_n, grid_r, width, batch_
     
     shape_grid = cdata_shape[0:Sdim]
     shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
-    kernal_ind = np.arange(np.ceil(-width),np.floor(width)+1)
-    kernal_ind = kernal_ind[None,:]
-    k_len = kernal_ind.size
+    kernel_ind = np.arange(np.ceil(-width),np.floor(width)+1)
+    kernel_ind = kernel_ind[None,:]
+    k_len = kernel_ind.size
     
     # data cartesian
     data_c = np.zeros([np.prod(np.array(shape_grid)),nCoil,nPhase],dtype = np.complex64)
@@ -408,13 +453,16 @@ def gridH(samples, ndata_shape, cdata_shape, traj, data_n, grid_r, width, batch_
             ky = traj[1,batch_ind,:,0,nP]
             kz = traj[2,batch_ind,:,0,nP]
 
+            t1 = time.time()
             w, strides_ind = grid_weight_calc(kx, ky, kz, grid_r, shape_stride, width)
-
+            print('weight time:',time.time()-t1)
+            
             # Coil Loop Memory limitation
+            t2 = time.time()
+            
             data_nt = data_n[0,batch_ind,:,:,nP]
-
             data_c[:,:,nP] = nu1.cadd2(data_c[:,:,nP],strides_ind,w,data_nt)
-            print('Grid time:',time.time()-t0)
+            print('Grid time:',time.time()-t2)
     # back to host
     data_c = data_c.reshape(shape_grid+[nCoil,nPhase])
     return data_c
@@ -435,9 +483,9 @@ def grid(samples, ndata_shape, cdata_shape, traj, data_c, grid_r, width, batch_s
     
     shape_grid = cdata_shape[0:Sdim]
     shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
-    kernal_ind = np.arange(np.ceil(-width),np.floor(width)+1)
-    kernal_ind = kernal_ind[None,:]
-    k_len = kernal_ind.size
+    kernel_ind = np.arange(np.ceil(-width),np.floor(width)+1)
+    kernel_ind = kernel_ind[None,:]
+    k_len = kernel_ind.size
     
     # data cartesian
     data_n = np.zeros(ndata_shape,dtype = np.complex64)

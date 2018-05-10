@@ -64,3 +64,45 @@ def cadd3(obj_arr, ind_arr, sub_arr1, sub_arr2):
                 obj_arr[i,k] += (tsub_arr1 * sub_arr2[tind,0,k])
             
     return obj_arr
+
+@jit(nopython=True,parallel=True)
+def badd3(obj_arr, sub_arr1, sub_arr2, sub_arr3):
+    # 3d broadcast add
+    # o += s1+s2+s3
+    # obj_arr: [No,nx,ny,nz]
+    # sub_arr1: [No,nx]
+    # sub_arr2: [No,ny]
+    # sub_arr3: [Ns,nz]
+    
+    No,nx,ny,nz = obj_arr.shape
+    for n in range(No):
+        for i in range(nx):
+            sx = sub_arr1[n,i]
+            for j in range(ny):
+                sy = sub_arr2[n,j]
+                for k in range(nz):
+                    sz = sub_arr3[n,k] 
+                    obj_arr[n,i,j,k] = sx+sy+sz
+            
+    return obj_arr
+
+@jit(nopython=True,parallel=True)
+def btimes3(obj_arr, sub_arr1, sub_arr2, sub_arr3):
+    # 3d broadcast times
+    # o += s1+s2+s3
+    # obj_arr: [No,nx,ny,nz]
+    # sub_arr1: [No,nx]
+    # sub_arr2: [No,ny]
+    # sub_arr3: [Ns,nz]
+    
+    No,nx,ny,nz = obj_arr.shape
+    for n in range(No):
+        for i in range(nx):
+            sx = sub_arr1[n,i]
+            for j in range(ny):
+                sy = sub_arr2[n,j]
+                for k in range(nz):
+                    sz = sub_arr3[n,k] 
+                    obj_arr[n,i,j,k] = sx*sy*sz
+            
+    return obj_arr
