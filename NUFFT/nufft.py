@@ -8,6 +8,7 @@ import time
 
 try:
     import cupy as cp
+    from numba import cuda
     CUDA_flag = True
 except ImportError:
     CUDA_flag = False
@@ -26,15 +27,15 @@ Sdim = 3 # Spatial Dimension
 Ddim = 3 # Data Dimension
 Padim = 4 # Parallel Dimension
 Phdim = 5 # Phase Dimension
-dtpye_n = np.complex64
-
+dtype_c = np.complex64
+dtype_r = np.float32
 
 
 class NUFFT3D():
     def __init__(self, traj, grid_r = None, os = 1, pattern = None, width = 3, seg = 500000, Toeplitz_flag = False, CUDA_flag1 = False):
         self.cuda = CUDA_flag & CUDA_flag1
         # trajectory
-        self.traj = os*traj
+        self.traj = os*traj.astype(dtype_r)
         if np.ndim(self.traj) < Ndims:
             for _ in range(Ndims-np.ndim(self.traj)):
                 self.traj = np.expand_dims(self.traj,axis=-1)
@@ -57,18 +58,18 @@ class NUFFT3D():
         self.ndata_shape = [1,self.samples,1,self.nParallel,self.nPhase]
         self.traj_shape = [3,self.samples,1,1,self.nPhase]
         self.p_shape = [1,self.samples,1,1,self.nPhase]
-        self.traj = self.traj.reshape(self.traj_shape)
-        
+        self.traj = np.reshape(self.traj,self.traj_shape)
+
         # Recon Parameter Def
         self.width = width
         self.seg = seg 
         self.I_size = [self.grid_r[i,1] - self.grid_r[i,0] for i in range(3)]
         self.cdata_shape = self.I_size + [self.nParallel,self.nPhase]
-        self.p = None if pattern is None else np.abs(pattern.reshape(self.p_shape))
+        self.p = None if pattern is None else np.abs(pattern.astype(dtype_c).reshape(self.p_shape))
 
         # Function Def: Grid, GridH, Toeplitz
         self.A = fft.fft(shape=1,axes=(0,1,2))
-        self.KB_win = self.A.IFT(KB_compensation(self.grid_r,self.I_size,width))
+        self.KB_win = self.A.IFT(KB_compensation(self.grid_r,self.I_size,width + .5))
         self.KB_win  =self.KB_win[:,:,:,None,None]
         
         # Toeplitz mode prep
@@ -106,6 +107,7 @@ class NUFFT3D():
         ndata_shapet[Padim-1] = tPa
         cdata_shapet[Padim-1] = tPa
         data_c = self.A.FT(img_c)
+        print(self.traj[2,:100,0,0,0])
         if self.cuda:
             data_n = grid_gpu(self.samples, ndata_shapet, cdata_shapet, self.traj, data_c, self.grid_r, self.width, self.seg)
         else:
@@ -114,6 +116,9 @@ class NUFFT3D():
         return data_n
         
     def adjoint(self,data_n):
+        if data_n.dtype is not dtype_c:
+            print('tansfer to single precise type ...')
+            data_n = data_n.astype(dtype_c)
         tPa = data_n.shape[Padim-1] if data_n.ndim>=Padim else 1
         ndata_shapet = self.ndata_shape
         cdata_shapet = self.cdata_shape
@@ -122,13 +127,14 @@ class NUFFT3D():
         data_n = np.reshape(data_n,self.ndata_shape)
         if self.p is not None :
             data_n = data_n*self.p
+
         if self.cuda:
-            data_c = gridH_gpu(self.samples, ndata_shapet, cdata_shapet, self.traj, data_n, self.grid_r, self.width, self.seg)
+            data_c = gridH_gpu1(self.samples, ndata_shapet, cdata_shapet, self.traj, data_n, self.grid_r, self.width, self.seg)
         else:
             data_c = gridH(self.samples, ndata_shapet, cdata_shapet, self.traj, data_n, self.grid_r, self.width, self.seg)
-        print(data_c.shape)
+        t0 = time.time()
         img_hc = self.A.IFT(data_c)/self.KB_win
-        
+        print('FFT time:',time.time()-t0)
         return img_hc
     
     def Toeplitz(self,img_c):
@@ -219,7 +225,6 @@ def grid_weight_calc(kx, ky, kz, grid_r, shape_stride, width):
     kernel_ind = kernel_ind[None,:]
     k_len = kernel_ind.size
     
-    # TODO grid_prep(wx,rind_x, kx, kernel_ind, width, kb_table)
     rind_x = np.zeros((batch_size,k_len))
     rind_y = np.zeros((batch_size,k_len))
     rind_z = np.zeros((batch_size,k_len))
@@ -230,26 +235,7 @@ def grid_weight_calc(kx, ky, kz, grid_r, shape_stride, width):
     tflag =  grid_prep(wx,rind_x, kx, kernel_ind, width, kb_table)
     tflag =  grid_prep(wy,rind_y, ky, kernel_ind, width, kb_table)
     tflag =  grid_prep(wz,rind_z, kz, kernel_ind, width, kb_table)
-    #rind_x = np.round(kx+kernel_ind)
-    #rind_y = np.round(ky+kernel_ind)
-    #rind_z = np.round(kz+kernel_ind)
 
-    #wx = KB_weight(np.abs(rind_x-kx),kb,width)
-    #wy = KB_weight(np.abs(rind_y-ky),kb,width)
-    #wz = KB_weight(np.abs(rind_z-kz),kb,width)
-
-    # limit all the gridding points in the grid
-    #aind_x = (np.minimum(np.maximum(rind_x,grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])[:,:,None,None]
-    #aind_y = (np.minimum(np.maximum(rind_y,grid_r[1,0]),grid_r[1,1]-1) - grid_r[1,0])[:,None,:,None]
-    #aind_z = (np.minimum(np.maximum(rind_z,grid_r[2,0]),grid_r[2,1]-1) - grid_r[2,0])[:,None,None,:]
-
-    #strides_ind = (shape_stride[0]*aind_x).astype(np.int32) + (shape_stride[1]*aind_y).astype(np.int32) + (shape_stride[2]*aind_z).astype(np.int32)
-
-    #w_mx = wx[:,:,None,None]*(aind_x == rind_x[:,:,None,None]-grid_r[0,0])
-    #w_my = wy[:,None,:,None]*(aind_y == rind_y[:,None,:,None]-grid_r[1,0])
-    #w_mz = wz[:,None,None,:]*(aind_z == rind_z[:,None,None,:]-grid_r[2,0])
-
-    # w = w_mx*w_my*w_mz
     aind_x = (shape_stride[0]*(np.minimum(np.maximum(rind_x,grid_r[0,0]),grid_r[0,1]-1) - grid_r[0,0])).astype(np.int32)
     aind_y = (shape_stride[1]*(np.minimum(np.maximum(rind_y,grid_r[1,0]),grid_r[1,1]-1) - grid_r[1,0])).astype(np.int32)
     aind_z = (shape_stride[2]*(np.minimum(np.maximum(rind_z,grid_r[2,0]),grid_r[2,1]-1) - grid_r[2,0])).astype(np.int32)
@@ -333,7 +319,7 @@ def grid_gpu(samples, ndata_shape, cdata_shape, traj, data_c, grid_r, width, bat
 
 
             # timing
-            print('Grid time:',time.time()-t0)
+            # print('Grid time:',time.time()-t0)
     data_n = data_n.reshape([3,samples,1,nCoil,nPhase])
     return data_n
 
@@ -417,6 +403,117 @@ def gridH_gpu(samples, ndata_shape, cdata_shape, traj, data_n, grid_r, width, ba
     
     return data_c
 
+#def gridH2(cdata, kx, ky, kz, ndata, width, shape_stride, grid_r):
+    # input:
+    #  kx ,ky ,kz: [N, 1]
+    #  ndata: [N, 1, nPa]
+    #  width: 1
+    #  shape_stride: [1,2*width+1]
+    #  grid_r: [3,2]
+    # output:
+    #  cdata: [x, y ,z, nPa]
+
+@cuda.jit()
+def gridH2_gpu(c_data1r, c_data1i, n_data1r, n_data1i, traj1, grid_r, width, scale, kb_t):
+    # Output:
+    #  c_data1: [x,y,z,nPa]
+    # Input:
+    #  n_data1: [1,N,nPa]
+    #  traj1: [3,N]
+    #  grid_r: [3,2]
+    #  width: 1
+    
+    Nx, Ny, Nz, nPa = c_data1r.shape
+    
+    mx = grid_r[0,0]
+    my = grid_r[1,0]
+    mz = grid_r[2,0]
+    N = traj1.shape[1]
+    n,npa = cuda.grid(2)
+    x = 0
+    if n < N :
+        for nx in range(-width,width+1):
+            xt = (traj1[0,n] + nx - mx + .5)//1
+            
+            kr_x = int(abs(xt - traj1[0,n] + mx )/scale)
+            wx = kb_t[kr_x]
+            indx = int(xt)
+            for ny in range(-width,width+1):
+                yt = (traj1[1,n] + ny - my  + .5)//1
+
+                kr_y = int(abs(yt - traj1[1,n] + my)/scale)
+                wy = kb_t[kr_y]
+                indy = int(yt)
+                for nz in range(-width,width+1):
+                    zt = (traj1[2,n] + nz - mz + .5)//1
+
+                    kr_z = int(abs(zt - traj1[2,n] + mz)/scale)
+                    wz = kb_t[kr_z]
+                    indz = int(zt)
+                    
+                    if indx>=0 and indx<Nx and indy>=0 and indy<Ny and indz>=0 and indz<Nx: 
+                        wt = wx*wy*wz
+                    else:
+                        wt = 0
+                    if npa < nPa: 
+                        cuda.atomic.add(c_data1i,(indx,indy,indz,npa),wt*n_data1i[n,npa])
+                        cuda.atomic.add(c_data1r,(indx,indy,indz,npa),wt*n_data1r[n,npa])    
+    
+@cuda.jit()
+def gridH2_gpu_t(c_data1r, c_data1i, n_data1r, n_data1i, traj1, grid_r, width, scale, kb_t):
+    # Output:
+    #  c_data1: [x,y,z,nPa]
+    # Input:
+    #  n_data1: [1,N,nPa]
+    #  traj1: [3,N]
+    #  grid_r: [3,2]
+    #  width: 1
+    
+    Nx, Ny, Nz, nPa = c_data1r.shape
+    
+    mx = grid_r[0,0]
+    my = grid_r[1,0]
+    mz = grid_r[2,0]
+    N = traj1.shape[1]
+    n,npa = cuda.grid(2)
+    x = 0
+    if n < N :
+        for nx in range(-width,width+1):
+            xt = (traj1[0,n] + nx - mx + .5)//1
+            if xt < 0 or xt >Nx-1:
+                wx = 0
+                indx =0
+            else:
+                kr_x = int(abs(xt - traj1[0,n] + mx )/scale)
+                wx = kb_t[kr_x]
+                indx = int(xt)
+            for ny in range(-width,width+1):
+                yt = (traj1[1,n] + ny - my  + .5)//1
+                if yt < 0 or yt >Ny-1:
+                    wy = 0
+                    indy =0
+                else:
+                    kr_y = int(abs(yt - traj1[1,n] + my)/scale)
+                    wy = kb_t[kr_y]
+                    indy = int(yt)
+                for nz in range(-width,width+1):
+                    zt = (traj1[2,n] + nz - mz + .5)//1
+                    if zt <= 0 or zt >Nz-1:
+                        wz = 0
+                        indz =0
+                    else:
+                        kr_z = int(abs(zt - traj1[2,n] + mz)/scale)
+                        wz = kb_t[kr_z]
+                        indz = int(zt)
+                        
+                    wt = wx*wy*wz
+                    if npa < nPa: 
+                        cuda.atomic.add(c_data1i,(indx,indy,indz,npa),wt*n_data1i[n,npa])
+                        cuda.atomic.add(c_data1r,(indx,indy,indz,npa),wt*n_data1r[n,npa])
+                        
+            
+    
+
 def gridH(samples, ndata_shape, cdata_shape, traj, data_n, grid_r, width, batch_size, pattern = None):
     # samples: int(N), num of sample
     # traj: [3,N,1,1,1,nbin],non-scaled trajectory
@@ -461,11 +558,62 @@ def gridH(samples, ndata_shape, cdata_shape, traj, data_n, grid_r, width, batch_
             t2 = time.time()
             
             data_nt = data_n[0,batch_ind,:,:,nP]
-            data_c[:,:,nP] = nu1.cadd2(data_c[:,:,nP],strides_ind,w,data_nt)
+            #data_c[:,:,nP] = nu1.cadd2(data_c[:,:,nP],strides_ind,w,data_nt)
+            nu1.cadd2(data_c[:,:,nP],strides_ind,w,data_nt)
             print('Grid time:',time.time()-t2)
     # back to host
     data_c = data_c.reshape(shape_grid+[nCoil,nPhase])
     return data_c
+
+def gridH_gpu1(samples, ndata_shape, cdata_shape, traj, data_n, grid_r, width, batch_size, pattern = None):
+    # samples: int(N), num of sample
+    # traj: [3,N,1,1,1,nbin],non-scaled trajectory
+    # data_n: [1,N,1,nC,1,nbin],noncart data
+    # grid_r: [2,3] 3D grid range
+    # width: Half length of KB window
+    # batch_size: limit memory use
+    # 
+    # kb  = kb_table2
+    
+    # preparation
+    # nCoil = cdata_shape[3]
+    nCoil = cdata_shape[Padim-1]
+    nPhase = cdata_shape[Phdim-1]
+    
+    shape_grid = cdata_shape[0:Sdim]
+    shape_stride = [shape_grid[2]*shape_grid[1],shape_grid[2],1]
+    kernel_ind = np.arange(np.ceil(-width),np.floor(width)+1)
+    kernel_ind = kernel_ind[None,:]
+    k_len = kernel_ind.size
+    
+    # data cartesian
+    data_c = np.zeros(shape_grid+[nCoil,nPhase],dtype = dtype_c)
+    data_n = np.reshape(data_n,ndata_shape)
+    
+    scale = (width+.5)/(kb_table.shape[0]-1)
+    data_cr = np.zeros(tuple(shape_grid+[nCoil]),dtype = dtype_r)
+    data_ci = np.zeros(tuple(shape_grid+[nCoil]),dtype = dtype_r)
+    
+    t0 = time.time()
+    for nP in range(nPhase):
+        data_cr[:] = 0
+        data_ci[:] = 0
+        for i in range((samples-1)//batch_size + 1):
+            batch_ind = np.arange(i*batch_size,np.minimum((i+1)*batch_size,samples))
+            traj1 = np.ascontiguousarray(traj[:,batch_ind,0,0,nP])
+            data_nr = np.ascontiguousarray(np.real(data_n[0,batch_ind,0,:,nP]))
+            data_ni = np.ascontiguousarray(np.imag(data_n[0,batch_ind,0,:,nP]))
+
+            tpb = (32,16)
+            bpg = (int(np.ceil(batch_size/tpb[0])),int(np.ceil(nCoil/tpb[1])))
+            gridH2_gpu[bpg,tpb](data_cr, data_ci, data_nr, data_ni, traj1, np.array(grid_r), width, scale, kb_table)
+        
+        data_c[:,:,:,:,nP] = data_cr +1j*data_ci 
+    print('Total Griding time:',time.time()-t0)
+    cuda.close()
+    # back to host
+    return data_c
+
 
 def grid(samples, ndata_shape, cdata_shape, traj, data_c, grid_r, width, batch_size, pattern = None):
     # samples: int(N), num of sample
