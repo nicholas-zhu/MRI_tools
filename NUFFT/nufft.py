@@ -432,32 +432,26 @@ def gridH2_gpu(c_data1r, c_data1i, n_data1r, n_data1i, traj1, grid_r, width, sca
     n,npa = cuda.grid(2)
     x = 0
     if n < N :
-        for nx in range(-width,width+1):
-            xt = (traj1[0,n] + nx - mx + .5)//1
-            
-            kr_x = int(abs(xt - traj1[0,n] + mx )/scale)
+        xL = int(max(traj1[0,n] - mx + 0.5 - width,0))
+        xR = int(min(traj1[0,n] - mx + 0.5 + width,Nx-1))
+        yL = int(max(traj1[1,n] - my + 0.5 - width,0))
+        yR = int(min(traj1[1,n] - my + 0.5 + width,Ny-1))
+        zL = int(max(traj1[2,n] - mz + 0.5 - width,0))
+        zR = int(min(traj1[2,n] - mz + 0.5 + width,Nz-1))
+        for idx in range(xL,xR):
+            kr_x = int(abs(idx - traj1[0,n] + mx )/scale)
             wx = kb_t[kr_x]
-            indx = int(xt)
-            for ny in range(-width,width+1):
-                yt = (traj1[1,n] + ny - my  + .5)//1
-
-                kr_y = int(abs(yt - traj1[1,n] + my)/scale)
+            for idy in range(yL,yR):
+                kr_y = int(abs(idy - traj1[1,n] + my )/scale)
                 wy = kb_t[kr_y]
-                indy = int(yt)
-                for nz in range(-width,width+1):
-                    zt = (traj1[2,n] + nz - mz + .5)//1
-
-                    kr_z = int(abs(zt - traj1[2,n] + mz)/scale)
+                for idz in range(zL,zR):
+                    kr_z = int(abs(idz - traj1[2,n] + mz )/scale)
                     wz = kb_t[kr_z]
-                    indz = int(zt)
-                    
-                    if indx>=0 and indx<Nx and indy>=0 and indy<Ny and indz>=0 and indz<Nx: 
-                        wt = wx*wy*wz
-                    else:
-                        wt = 0
+                    wt = wx*wy*wz
+
                     if npa < nPa: 
-                        cuda.atomic.add(c_data1i,(indx,indy,indz,npa),wt*n_data1i[n,npa])
-                        cuda.atomic.add(c_data1r,(indx,indy,indz,npa),wt*n_data1r[n,npa])    
+                        cuda.atomic.add(c_data1i,(idx,idy,idz,npa),wt*n_data1i[n,npa])
+                        cuda.atomic.add(c_data1r,(idx,idy,idz,npa),wt*n_data1r[n,npa])    
     
 @cuda.jit()
 def gridH2_gpu_t(c_data1r, c_data1i, n_data1r, n_data1i, traj1, grid_r, width, scale, kb_t):
@@ -476,7 +470,6 @@ def gridH2_gpu_t(c_data1r, c_data1i, n_data1r, n_data1i, traj1, grid_r, width, s
     mz = grid_r[2,0]
     N = traj1.shape[1]
     n,npa = cuda.grid(2)
-    x = 0
     if n < N :
         for nx in range(-width,width+1):
             xt = (traj1[0,n] + nx - mx + .5)//1
@@ -604,13 +597,13 @@ def gridH_gpu1(samples, ndata_shape, cdata_shape, traj, data_n, grid_r, width, b
             data_nr = np.ascontiguousarray(np.real(data_n[0,batch_ind,0,:,nP]))
             data_ni = np.ascontiguousarray(np.imag(data_n[0,batch_ind,0,:,nP]))
 
-            tpb = (32,16)
+            tpb = (16,8)
             bpg = (int(np.ceil(batch_size/tpb[0])),int(np.ceil(nCoil/tpb[1])))
             gridH2_gpu[bpg,tpb](data_cr, data_ci, data_nr, data_ni, traj1, np.array(grid_r), width, scale, kb_table)
         
         data_c[:,:,:,:,nP] = data_cr +1j*data_ci 
     print('Total Griding time:',time.time()-t0)
-    cuda.close()
+    #cuda.close()
     # back to host
     return data_c
 
