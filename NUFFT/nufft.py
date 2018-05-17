@@ -68,7 +68,10 @@ class NUFFT3D():
         self.p = None if pattern is None else np.abs(pattern.astype(dtype_c).reshape(self.p_shape))
 
         # Function Def: Grid, GridH, Toeplitz
-        self.A = fft.fft(shape=1,axes=(0,1,2))
+        if self.cuda:
+            self.A = fft.fft_gpu(axes=(0,1,2))
+        else:
+            self.A = fft.fft(shape=1,axes=(0,1,2))
         self.KB_win = self.A.IFT(KB_compensation(self.grid_r,self.I_size,width + .5))
         self.KB_win  =self.KB_win[:,:,:,None,None]
         
