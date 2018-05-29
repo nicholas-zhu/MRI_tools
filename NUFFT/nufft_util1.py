@@ -106,3 +106,82 @@ def btimes3(obj_arr, sub_arr1, sub_arr2, sub_arr3):
                     obj_arr[n,i,j,k] = sx*sy*sz
             
     return obj_arr
+
+@jit(nopython=True,parallel=True)
+def grid2(n_data1, c_data1, traj1, grid_r, width, scale, kernel):
+    # Output:
+    #  c_data1: [x,y,z,nPa]
+    # Input:
+    #  n_data1: [1,N,nPa]
+    #  traj1: [3,N]
+    #  grid_r: [3,2]
+    #  width: 1
+    
+    Nx, Ny, Nz, nPa = c_data1.shape
+    
+    mx = grid_r[0,0]
+    my = grid_r[1,0]
+    mz = grid_r[2,0]
+    N = traj1.shape[1]
+    x = 0
+    for n in range(N):
+        xL = int(max(traj1[0,n] - mx + 0.5 - width,0))
+        xR = int(min(traj1[0,n] - mx + 0.5 + width,Nx-1))
+        yL = int(max(traj1[1,n] - my + 0.5 - width,0))
+        yR = int(min(traj1[1,n] - my + 0.5 + width,Ny-1))
+        zL = int(max(traj1[2,n] - mz + 0.5 - width,0))
+        zR = int(min(traj1[2,n] - mz + 0.5 + width,Nz-1))
+        
+        for idx in range(xL,xR):
+            kr_x = int(abs(idx - traj1[0,n] + mx )/scale)
+            wx = kernel[kr_x]
+            for idy in range(yL,yR):
+                kr_y = int(abs(idy - traj1[1,n] + my )/scale)
+                wy = kernel[kr_y]
+                for idz in range(zL,zR):
+                    kr_z = int(abs(idz - traj1[2,n] + mz )/scale)
+                    wz = kernel[kr_z]
+                    wt = wx*wy*wz
+                    for npa in range(nPa): 
+                        n_data1[n,npa] += wt*c_data1[idx,idy,idz,npa] 
+
+@jit(nopython=True,parallel=True)
+def gridH2(c_data1, n_data1, traj1, grid_r, width, scale, kernel):
+    # Output:
+    #  c_data1: [x,y,z,nPa]
+    # Input:
+    #  n_data1: [1,N,nPa]
+    #  traj1: [3,N]
+    #  grid_r: [3,2]
+    #  width: 1
+    
+    Nx, Ny, Nz, nPa = c_data1.shape
+    
+    mx = grid_r[0,0]
+    my = grid_r[1,0]
+    mz = grid_r[2,0]
+    N = traj1.shape[1]
+    x = 0
+    for n in range(N):
+        xL = int(max(traj1[0,n] - mx + 0.5 - width,0))
+        xR = int(min(traj1[0,n] - mx + 0.5 + width,Nx-1))
+        yL = int(max(traj1[1,n] - my + 0.5 - width,0))
+        yR = int(min(traj1[1,n] - my + 0.5 + width,Ny-1))
+        zL = int(max(traj1[2,n] - mz + 0.5 - width,0))
+        zR = int(min(traj1[2,n] - mz + 0.5 + width,Nz-1))
+        
+        for idx in range(xL,xR):
+            kr_x = int(abs(idx - traj1[0,n] + mx )/scale)
+            wx = kernel[kr_x]
+            for idy in range(yL,yR):
+                kr_y = int(abs(idy - traj1[1,n] + my )/scale)
+                wy = kernel[kr_y]
+                for idz in range(zL,zR):
+                    kr_z = int(abs(idz - traj1[2,n] + mz )/scale)
+                    wz = kernel[kr_z]
+                    wt = wx*wy*wz
+                    for npa in range(nPa): 
+                        c_data1[idx,idy,idz,npa] += wt*n_data1[n,npa]
+                        
+
+                                              
