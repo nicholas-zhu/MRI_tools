@@ -1,7 +1,12 @@
 import numpy as np
 import pyfftw as pfft
 import multiprocessing
-import cupy as cp
+try:
+    import cupy as cp
+    CUDA_flag = True
+except ImportError:
+    CUDA_flag = False
+
 
 N_max = multiprocessing.cpu_count()
 N_min = 1
