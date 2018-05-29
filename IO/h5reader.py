@@ -18,21 +18,21 @@ def uwute_read(h5file_name_base, nTE = 1, return_flag = False):
         
         # data
         for nte in range(nTE):
-            time = np.squeeze(fr['Gating'][f'TIME_E{nte}'])
+            time = np.squeeze(fr['Gating']['TIME_E{nte}'.format(nte = nte)])
             order = np.argsort(time)
             trajn = []
             for i in ['Y','X','Z']:
-                trajn.append(fr['Kdata'][f'K{i}_E{nte}'][0][order])
+                trajn.append(fr['Kdata']['K{i}_E{nte}'.format(i = i, nte = nte)][0][order])
             trajn = np.stack(trajn,axis=-1)
             traj.append(trajn)
             
             datanc = []
             for nc in range(nCoil):
-                d = fr['Kdata'][f'KData_E{nte}_C{nc}']
+                d = fr['Kdata']['KData_E{nte}_C{nc}'.format(nte = nte, nc = nc)]
                 datanc.append(d['real'][0][order] + 1j*d['imag'][0][order])
             data.append(datanc)
             
-            dcf.append(fr['Kdata'][f'KW_E{nte}'])
+            dcf.append(fr['Kdata']['KW_E{nte}'.format(nte = nte)])
         data = np.array(data)
         traj = np.array(traj)  
         dcf = np.array(dcf)
