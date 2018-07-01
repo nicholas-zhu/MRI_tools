@@ -125,16 +125,59 @@ gridH2_gput = cp.ElementwiseKernel(
     const int endx = floor(posx + width / 2.0);
     const int endy = floor(posy + width / 2.0);
     const int endz = floor(posz + width / 2.0);
-    for (int x = startx; x < endx + 1; x++) {
-        const S wx = lin_interp(&table[0], table.size(), fabsf((S) x - posx) / (width / 2.0));
+    for (int z = startz; z < endz + 1; z++) {
+        const S wz = lin_interp(&table[0], table.size(), fabsf((S) z - posz) / (width / 2.0));
         for (int y = starty; y < endy + 1; y++) {
-            const S wy = wx * lin_interp(&table[0], table.size(), fabsf((S) y - posy) / (width / 2.0));
+            const S wy = wz * lin_interp(&table[0], table.size(), fabsf((S) y - posy) / (width / 2.0));
             for (int x = startx; x < endx + 1; x++) {
-                const S w = wy * lin_interp(&table[0], table.size(), fabsf((S) z - posz) / (width / 2.0));
+                const S w = wy * lin_interp(&table[0], table.size(), fabsf((S) x - posx) / (width / 2.0));
                 for (int nP = 0; nP < nPa; nP++) {
                     const int input_idx[] = {i, nP};
+                    const int output_idx[] = {pos_mod(x, nx), pos_mod(y, ny), pos_mod(z, nz),nP};
+
                     const T v = (T) w * input[input_idx];
-                    const int output_idx[] = {pos_mod(x, nx), pos_mod(y, ny), pos_mod(z, nz),b};
+                    atomicAdd(reinterpret_cast<T::value_type*>(&(output[output_idx])), v.real());
+                    atomicAdd(reinterpret_cast<T::value_type*>(&(output[output_idx])) + 1, v.imag());
+                }
+            }
+        }
+    }
+    ''',
+    name='griddingH3_complex',
+    preamble=lin_interp_cuda + pos_mod_cuda,
+    reduce_dims=False)
+
+grid2_gput = cp.ElementwiseKernel(
+    'raw T output, raw T input, raw S coord, raw S width, raw S table',
+    '',
+    '''
+    const int nPa = input.shape()[3];
+    const int nx = input.shape()[0];
+    const int ny = input.shape()[1];
+    const int nz = input.shape()[2];
+    const int coordz_idx[] = {0, i};
+    const S posz = coord[coordz_idx];
+    const int coordy_idx[] = {1, i};
+    const S posy = coord[coordy_idx];
+    const int coordx_idx[] = {2, i};
+    const S posx = coord[coordx_idx];
+    const int startx = ceil(posx - width / 2.0);
+    const int starty = ceil(posy - width / 2.0);
+    const int startz = ceil(posz - width / 2.0);
+    const int endx = floor(posx + width / 2.0);
+    const int endy = floor(posy + width / 2.0);
+    const int endz = floor(posz + width / 2.0);
+    for (int z = startz; z < endz + 1; z++) {
+        const S wz = lin_interp(&table[0], table.size(), fabsf((S) z - posz) / (width / 2.0));
+        for (int y = starty; y < endy + 1; y++) {
+            const S wy = wz * lin_interp(&table[0], table.size(), fabsf((S) y - posy) / (width / 2.0));
+            for (int x = startx; x < endx + 1; x++) {
+                const S w = wy * lin_interp(&table[0], table.size(), fabsf((S) x - posx) / (width / 2.0));
+                for (int nP = 0; nP < nPa; nP++) {
+                    const int input_idx[] = {pos_mod(x, nx), pos_mod(y, ny), pos_mod(z, nz),nP};
+                    const int output_idx[] = {i, nP};
+                    
+                    const T v = (T) w * input[input_idx];
                     atomicAdd(reinterpret_cast<T::value_type*>(&(output[output_idx])), v.real());
                     atomicAdd(reinterpret_cast<T::value_type*>(&(output[output_idx])) + 1, v.imag());
                 }
