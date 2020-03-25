@@ -1,6 +1,6 @@
 import numpy as np
-from util import process_3d
-from FFT import fft
+from . import process_3d
+from . import fft
 
 def lap_unwrap(phase_array, axes = (0,1,2), pad_size = [6,6,6], res = [1,1,1]):
     pad_size = [6,6,6]

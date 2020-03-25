@@ -1,5 +1,4 @@
 import numpy as np
-from FFT import fft
 from util import *
 from scipy import optimize
 
